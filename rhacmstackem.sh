@@ -45,32 +45,47 @@ export CLUSTERCLAIM_GROUP_NAME=${CLUSTERCLAIM_GROUP_NAME:-"ERROR: Please specify
 export CLUSTERCLAIM_LIFETIME=${CLUSTERCLAIM_LIFETIME:-"12h"}
 export INSTALL_ICSP=${INSTALL_ICSP:-"false"}
 
+delete_existing_claim() {
+  CLUSTERDEPLOYMENT=$(oc get -n ${CLUSTERPOOL_TARGET_NAMESPACE} clusterclaim.hive ${CLUSTERCLAIM_NAME}  -o jsonpath='{.spec.namespace}')
+  oc delete -n ${CLUSTERPOOL_TARGET_NAMESPACE} clusterclaim.hive ${CLUSTERCLAIM_NAME}
+  if [[ -n "${CLUSTERDEPLOYMENT}" ]]; then
+    echo "* Waiting up to 5 minutes for Hive to process ClusterDeployment for deletion"
+    READY="false"
+    ATTEMPTS=0
+    MAX_ATTEMPTS=10
+    INTERVAL=30
+    while (oc get -n ${CLUSTERDEPLOYMENT} clusterdeployment.hive ${CLUSTERDEPLOYMENT}) && (( ATTEMPTS != MAX_ATTEMPTS )); do
+      echo "* Waiting another ${INTERVAL}s for cluster deployment cleanup (Retry $((++ATTEMPTS))/${MAX_ATTEMPTS})"
+      sleep ${INTERVAL}
+    done
+    if (oc get -n ${CLUSTERDEPLOYMENT} clusterdeployment.hive ${CLUSTERDEPLOYMENT} &>/dev/null); then
+      echo "* Manually deleting ClusterDeployment ${CLUSTERDEPLOYMENT}"
+      oc delete -n ${CLUSTERDEPLOYMENT} clusterdeployment.hive ${CLUSTERDEPLOYMENT}
+    fi
+  fi
+}
+
 # Check for existing claims of the same name
 echo "$(date) ##### Checking for existing claims named ${CLUSTERCLAIM_NAME}"
 if (oc get -n ${CLUSTERPOOL_TARGET_NAMESPACE} clusterclaim.hive ${CLUSTERCLAIM_NAME} &>/dev/null); then
   echo "* Existing claim found"
   case "${CLAIM_REUSE:-"delete"}" in
     delete)
-      CLUSTERDEPLOYMENT=$(oc get -n ${CLUSTERPOOL_TARGET_NAMESPACE} clusterclaim.hive ${CLUSTERCLAIM_NAME}  -o jsonpath='{.spec.namespace}')
-      oc delete -n ${CLUSTERPOOL_TARGET_NAMESPACE} clusterclaim.hive ${CLUSTERCLAIM_NAME}
-      if [[ -n "${CLUSTERDEPLOYMENT}" ]]; then
-        echo "* Waiting up to 5 minutes for Hive to process ClusterDeployment for deletion"
-        READY="false"
-        ATTEMPTS=0
-        MAX_ATTEMPTS=10
-        INTERVAL=30
-        while (oc get -n ${CLUSTERDEPLOYMENT} clusterdeployment.hive ${CLUSTERDEPLOYMENT}) && (( ATTEMPTS != MAX_ATTEMPTS )); do
-          echo "* Waiting another ${INTERVAL}s for cluster deployment cleanup (Retry $((++ATTEMPTS))/${MAX_ATTEMPTS})"
-          sleep ${INTERVAL}
-        done
-        if (oc get -n ${CLUSTERDEPLOYMENT} clusterdeployment.hive ${CLUSTERDEPLOYMENT} &>/dev/null); then
-          echo "* Manually deleting ClusterDeployment ${CLUSTERDEPLOYMENT}"
-          oc delete -n ${CLUSTERDEPLOYMENT} clusterdeployment.hive ${CLUSTERDEPLOYMENT}
-        fi
-      fi
+      delete_existing_claim
       ;;
     update)
       echo "* Reusing existing claim"
+      ;;
+    reuse-if-recent)
+      CLAIM_REUSE_MAX_AGE=${CLAIM_REUSE_MAX_AGE:-86400}
+      CLAIM_CREATED=$(oc get -n ${CLUSTERPOOL_TARGET_NAMESPACE} clusterclaim.hive ${CLUSTERCLAIM_NAME} -o jsonpath='{.metadata.creationTimestamp}')
+      CLAIM_AGE=$(( $(date +%s) - $(date -d "${CLAIM_CREATED}" +%s) ))
+      if (( CLAIM_AGE < CLAIM_REUSE_MAX_AGE )); then
+        echo "* Claim is ${CLAIM_AGE}s old (< ${CLAIM_REUSE_MAX_AGE}s) - reusing existing claim (likely an evicted retry)"
+      else
+        echo "* Claim is ${CLAIM_AGE}s old (>= ${CLAIM_REUSE_MAX_AGE}s) - stale, deleting and recreating"
+        delete_existing_claim
+      fi
       ;;
     *)
       echo "^^^^^ Unrecognized value found in CLAIM_REUSE: '${CLAIM_REUSE}'"
