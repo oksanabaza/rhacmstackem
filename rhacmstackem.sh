@@ -6,7 +6,8 @@ ERROR_CODE=0
 
 # Clone requisite repos and store paths
 echo "$(date) ##### Cloning Lifeguard, Deploy, Pipeline, and StartRHACM repos"
-git clone https://github.com/dhaiducek/startrhacm.git
+git clone --branch art-prototype \
+  https://github.com/oksanabaza/startrhacm.git
 git clone https://github.com/stolostron/lifeguard.git
 git clone "https://${GIT_USER}:${GIT_TOKEN}@github.com/stolostron/pipeline.git"
 git clone https://github.com/stolostron/deploy.git
